@@ -8,6 +8,7 @@ import platform
 import subprocess
 import threading
 import urllib.request
+import ctypes
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -17,7 +18,22 @@ from google.genai import types
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-DATA_FILE = "pycodex_data.json"
+# ================= ПУТИ, ИКОНКА И ПАПКА ПРОЕКТА =================
+def get_base_dir() -> str:
+    """Папка рядом со скриптом (.py) или с .exe (PyInstaller)."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+SCRIPT_DIR = get_base_dir()
+ICON_PATH = os.path.join(SCRIPT_DIR, "PyCodex.ico")
+DATA_FILE = os.path.join(SCRIPT_DIR, "pycodex_data.json")
+
+# Все относительные пути инструментов ИИ будут считаться от папки проекта
+try:
+    os.chdir(SCRIPT_DIR)
+except Exception:
+    pass
 
 # ================= 1. ВШИТЫЙ БАЗОВЫЙ СИСТЕМНЫЙ ПРОМПТ =================
 CORE_SYSTEM_PROMPT = (
@@ -277,8 +293,36 @@ class PyCodex(ctk.CTk):
         self.attached_file_path = None
         self.is_generating = False
 
+        self._set_icon()
         self._build_ui()
         self._load_chats_to_sidebar()
+
+    def _set_icon(self):
+        # 1. Windows: свой AppUserModelID, иначе панель задач покажет иконку python.exe
+        try:
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PyCodex.App.1.0")
+        except Exception:
+            pass
+
+        if not os.path.exists(ICON_PATH):
+            print(f"Внимание: иконка не найдена по пути {ICON_PATH}")
+            return
+
+        # 2. Иконка заголовка окна и Alt-Tab
+        try:
+            self.iconbitmap(ICON_PATH)
+        except Exception as e:
+            print(f"iconbitmap: {e}")
+
+        # 3. Иконка на панели задач Windows — нужен именно PhotoImage из .ico через PIL
+        try:
+            from PIL import Image, ImageTk
+            pil_img = Image.open(ICON_PATH).convert("RGBA")
+            photo = ImageTk.PhotoImage(pil_img)
+            self.iconphoto(True, photo)
+            self._taskbar_icon = photo  # обязательно сохранить ссылку, иначе Tkinter её удалит
+        except Exception as e:
+            print(f"iconphoto: {e} (поставь pillow: pip install pillow)")
 
     def _build_ui(self):
         self.grid_columnconfigure(0, weight=0, minsize=240)
@@ -327,15 +371,13 @@ class PyCodex(ctk.CTk):
         self.input_card.grid(row=2, column=0, padx=25, pady=(5, 5), sticky="ew")
         self.input_card.grid_columnconfigure(0, weight=1)
 
-        # Текстовое поле без неподдерживаемых аргументов
         self.txt_input = ctk.CTkTextbox(
             self.input_card, height=45,
             font=("Segoe UI", 13), fg_color="transparent",
             text_color="#ffffff", wrap="word"
         )
         self.txt_input.grid(row=0, column=0, padx=(15, 10), pady=6, sticky="ew")
-        
-        # Биндим отправку только на Ctrl + Enter
+
         self.txt_input.bind("<Control-Return>", self._handle_ctrl_enter)
         self.txt_input.bind("<Control-KP_Enter>", self._handle_ctrl_enter)
 
@@ -584,7 +626,7 @@ class PyCodex(ctk.CTk):
 
             while True:
                 stream = session.send_message_stream(current_input)
-                
+
                 accumulated_text = ""
                 pending_function_calls = []
                 stream_bubble = None
@@ -656,6 +698,13 @@ class PyCodex(ctk.CTk):
         win.geometry("540x570")
         win.configure(fg_color="#212121")
         win.grab_set()
+
+        # Иконка и для окна настроек
+        try:
+            if os.path.exists(ICON_PATH):
+                win.iconbitmap(ICON_PATH)
+        except Exception:
+            pass
 
         ctk.CTkLabel(win, text="Google AI Studio API Key:", font=("Segoe UI", 12)).pack(anchor="w", padx=25, pady=(15, 2))
         entry_api = ctk.CTkEntry(win, show="*", fg_color="#2b2b2b", border_color="#444444")
